@@ -3,9 +3,9 @@
 // trick from https://github.com/jenkinsci/workflow-cps-global-lib-plugin/pull/43
 def lib = library identifier: 'sct@snapshot', retriever: legacySCM(scm)
 
-// Every run of this job must be billed to the S3 page cache project.
-if (params.billing_project != 'S3 Page Caching') {
-    error("billing_project is '${params.billing_project}': set it to 'S3 Page Caching'")
+// Every run of this job must be billed to the project of the S3 page cache work.
+if (params.billing_project != 'Tables on object-storage') {
+    error("billing_project is '${params.billing_project}': set it to 'Tables on object-storage'")
 }
 
 perfRegressionParallelPipeline(
