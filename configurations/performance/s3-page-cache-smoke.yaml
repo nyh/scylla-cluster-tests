@@ -1,0 +1,31 @@
+# Short run of the S3 throughput-steps test, to check that the job works end to end before a full ~5 hour run.
+# Add it last to test_config. It shrinks the data from 190M to 2M rows, the cache warm-up from 120M to 200k reads,
+# and the steps to two 1-minute steps per workload (one throttled, one unthrottled).
+# 2M rows of 1 KB fit in memory, so the latencies of this run say nothing about S3.
+# The test's fixed pauses (4 minutes after the warm-up, at least 3 minutes after each read step) stay,
+# so the read test still takes ~15 minutes after the cluster is up.
+test_duration: 120
+
+prepare_write_cmd: [
+    "cassandra-stress write  cl=ALL n=1000000 -schema 'replication(strategy=NetworkTopologyStrategy,replication_factor=3)' -mode connectionsPerHost=8 cql3 native -rate threads=100 throttle=75000/s -col 'size=FIXED(1024) n=FIXED(1)'  -pop seq=1..1000000",
+    "cassandra-stress write  cl=ALL n=1000000 -schema 'replication(strategy=NetworkTopologyStrategy,replication_factor=3)' -mode connectionsPerHost=8 cql3 native -rate threads=100 throttle=75000/s -col 'size=FIXED(1024) n=FIXED(1)'  -pop seq=1000001..2000000",
+]
+
+stress_cmd_w: [
+  "cassandra-stress write no-warmup cl=QUORUM duration=$duration -schema 'replication(strategy=NetworkTopologyStrategy,replication_factor=3)' -mode connectionsPerHost=8 cql3 native -rate 'threads=$threads $throttle' -col 'size=FIXED(1024) n=FIXED(1)' -pop seq=1..1000000",
+  "cassandra-stress write no-warmup cl=QUORUM duration=$duration -schema 'replication(strategy=NetworkTopologyStrategy,replication_factor=3)' -mode connectionsPerHost=8 cql3 native -rate 'threads=$threads $throttle' -col 'size=FIXED(1024) n=FIXED(1)' -pop seq=1000001..2000000",
+]
+
+stress_cmd_r: [
+  "cassandra-stress read no-warmup cl=QUORUM duration=$duration -mode connectionsPerHost=8 cql3 native -rate 'threads=$threads $throttle' -col 'size=FIXED(1024) n=FIXED(1)' -pop 'dist=gauss(1..2000000,1000000,200000)'",
+  "cassandra-stress read no-warmup cl=QUORUM duration=$duration -mode connectionsPerHost=8 cql3 native -rate 'threads=$threads $throttle' -col 'size=FIXED(1024) n=FIXED(1)' -pop 'dist=gauss(1..2000000,1000000,200000)'",
+]
+
+stress_cmd_cache_warmup: [
+  "cassandra-stress read no-warmup cl=ALL n=100000 -mode connectionsPerHost=8 cql3 native -rate 'threads=$threads' -col 'size=FIXED(1024) n=FIXED(1)' -pop 'dist=gauss(1..2000000,1000000,200000)'",
+  "cassandra-stress read no-warmup cl=ALL n=100000 -mode connectionsPerHost=8 cql3 native -rate 'threads=$threads' -col 'size=FIXED(1024) n=FIXED(1)' -pop 'dist=gauss(1..2000000,1000000,200000)'",
+]
+
+perf_gradual_threads: {"read": [900, 900], "write": 500}
+perf_gradual_throttle_steps: {"read": ['5000', 'unthrottled'], "write": ['25000', 'unthrottled']}
+perf_gradual_step_duration: {"read": '1m', "write": '1m'}
