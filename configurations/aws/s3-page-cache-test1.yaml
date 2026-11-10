@@ -1,0 +1,8 @@
+# What Jakub Smolar's AWS run of the S3 throughput-steps test used (Jenkins jsmolar/Performance/
+# s3-scylla-enterprise-perf-regression-predefined-throughput-steps-tablets #4, 2026-10-22), so that we can
+# reproduce it before testing other Scylla builds:
+#  - Scylla 2026.4.0~dev-20261019 (us-east-1 AMI);
+#  - i8g.2xlarge DB nodes: that run overrode the r8gd.2xlarge of perf-regression-predefined-throughput-steps-s3.yaml.
+# The jenkins "scylla_ami_id" parameter or a BYO build (SCT_AMI_ID_DB_SCYLLA) override the AMI.
+ami_id_db_scylla: 'ami-00564af4a97d5d7e3'
+instance_type_db: 'i8g.2xlarge'
