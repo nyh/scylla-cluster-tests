@@ -1,0 +1,17 @@
+# Turns on the disk page cache of sstables on object storage (Scylla branch s3-2, scylladb PR 32563) in the S3
+# throughput-steps test. Add it after configurations/aws/perf-regression-predefined-throughput-steps-s3.yaml in
+# test_config. The Scylla build must have the page cache: build it with the BYO parameters
+# (byo_scylla_repo git@github.com:nyh/scylla.git, byo_scylla_branch s3-2).
+#
+# The cache keeps pages of S3 sstables on the local NVMe disk, in the node-local table system_cache.pagecache,
+# up to object_storage_page_cache_size_in_mb per node. 10240 (10 GiB) is the branch's default.
+experimental_features:
+  - object-storage-page-cache
+
+append_scylla_yaml:
+  object_storage_page_cache_size_in_mb: 10240
+
+# The keyspace of perf-regression-predefined-throughput-steps-s3.yaml, with 'disk_cache': 'pages' added.
+pre_create_keyspace: [
+  "CREATE KEYSPACE IF NOT EXISTS keyspace1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'} AND storage = {'type': 'S3', 'bucket': 'manager-backup-tests-us-east-1', 'endpoint': 's3.us-east-1.amazonaws.com', 'disk_cache': 'pages'};",
+]
