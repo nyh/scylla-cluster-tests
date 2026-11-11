@@ -9,6 +9,12 @@
 # cache takes ~1.5 times its size on disk, more during its compactions, so 800 GiB (~1,200 GiB on disk, up to
 # ~1,600 GiB at peaks) leaves room for the commitlog and the system tables. Each node holds the whole dataset of the
 # test (RF=3 on 3 nodes), ~190-210 GB, so the cache never reaches this limit.
+# Clear the AMI of configurations/aws/s3-page-cache-test1.yaml, so that only a BYO build (SCT_AMI_ID_DB_SCYLLA) or the
+# scylla_ami_id parameter can provide Scylla. The pipeline continues after a failed or aborted BYO build, so without
+# this the test would run on that older AMI, which has no page cache; now provisioning fails at once instead
+# ("missing options: ['ami_id_db_scylla']").
+ami_id_db_scylla: ''
+
 experimental_features:
   - object-storage-page-cache
 
