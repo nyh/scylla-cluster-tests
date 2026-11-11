@@ -4,12 +4,16 @@
 # (byo_scylla_repo git@github.com:nyh/scylla.git, byo_scylla_branch s3-2).
 #
 # The cache keeps pages of S3 sstables on the local NVMe disk, in the node-local table system_cache.pagecache,
-# up to object_storage_page_cache_size_in_mb per node. 10240 (10 GiB) is the branch's default.
+# up to object_storage_page_cache_size_in_mb per node. Here it is as large as the disk allows, so that it can hold the
+# whole dataset (this test doesn't exercise eviction): an i8g.2xlarge has one 1,875 GB (~1,746 GiB) NVMe disk, and the
+# cache takes ~1.5 times its size on disk, more during its compactions, so 800 GiB (~1,200 GiB on disk, up to
+# ~1,600 GiB at peaks) leaves room for the commitlog and the system tables. Each node holds the whole dataset of the
+# test (RF=3 on 3 nodes), ~190-210 GB, so the cache never reaches this limit.
 experimental_features:
   - object-storage-page-cache
 
 append_scylla_yaml:
-  object_storage_page_cache_size_in_mb: 10240
+  object_storage_page_cache_size_in_mb: 819200
 
 # The keyspace of perf-regression-predefined-throughput-steps-s3.yaml, with 'disk_cache': 'pages' added.
 pre_create_keyspace: [
