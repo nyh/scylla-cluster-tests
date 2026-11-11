@@ -1,0 +1,34 @@
+# Latency and throughput limits for the predefined throughput steps test on an S3 keyspace. Argus checks every step
+# against them, and a step outside its limits marks the run FAILURE. Use this file instead of
+# latency-decorator-error-thresholds-steps-ent-tablets.yaml, whose limits are for local disks.
+# The limits of a step are the "default" entry of its workload (also see defaults/test_default.yaml), updated by the
+# entry named after the step. A step is named after its rate ("5000", "unthrottled"), with "_<threads>_threads" added
+# when the steps of the workload use different thread counts ("5000_900_threads").
+#
+# Writes go to the local commitlog and memtables, and only flushed sstables go to S3, so the local-disk write limits
+# fit: P99 write <= 10 ms in the throttled steps, and throughput >= 235014 op/s in the unthrottled step. Jakub's S3
+# run (Jenkins jsmolar/Performance/s3-scylla-enterprise-perf-regression-predefined-throughput-steps-tablets #4)
+# passed them: P99 2.7 and 5.3 ms, 308k op/s.
+#
+# Reads that miss the cache go to S3: the same run had P99 101-633 ms, against a local-disk limit of 10 ms. One run
+# doesn't tell how much these numbers vary between runs, so there are no read limits until we have a few more.
+latency_decorator_error_thresholds:
+  write:
+    default:
+      P90 write:
+        fixed_limit: null
+      P99 write:
+        fixed_limit: 10
+    unthrottled:
+      P90 write:
+        fixed_limit: null
+      P99 write:
+        fixed_limit: null
+      Throughput write:
+        fixed_limit: 235014
+  read:
+    default:
+      P90 read:
+        fixed_limit: null
+      P99 read:
+        fixed_limit: null
