@@ -2731,6 +2731,24 @@ Disable the tablet load balancer after the data preparation and before the first
 **type:** boolean
 
 
+## **perf_scan_before_warmup** / SCT_PERF_SCAN_BEFORE_WARMUP
+
+Before the cache warm-up of the gradual performance test, read every row of the test table on every replica (SELECT count(*) at CL=ALL), e.g. to fill the object storage page cache
+
+**default:** N/A
+
+**type:** boolean
+
+
+## **perf_s3_counters_interval** / SCT_PERF_S3_COUNTERS_INTERVAL
+
+If set, the gradual performance test logs the S3 client's and the caches' counters of every DB node at the start and end of every phase, and every this many seconds during the steps
+
+**default:** N/A
+
+**type:** int
+
+
 ## **skip_download** / SCT_SKIP_DOWNLOAD
 
 

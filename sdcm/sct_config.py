@@ -1927,6 +1927,20 @@ class SCTConfiguration(dict):
             help="Disable the tablet load balancer after the data preparation and before the first throttle step, "
             "so that no tablet migration runs during the measurement",
         ),
+        dict(
+            name="perf_scan_before_warmup",
+            env="SCT_PERF_SCAN_BEFORE_WARMUP",
+            type=boolean,
+            help="Before the cache warm-up of the gradual performance test, read every row of the test table on "
+            "every replica (SELECT count(*) at CL=ALL), e.g. to fill the object storage page cache",
+        ),
+        dict(
+            name="perf_s3_counters_interval",
+            env="SCT_PERF_S3_COUNTERS_INTERVAL",
+            type=int,
+            help="If set, the gradual performance test logs the S3 client's and the caches' counters of every DB "
+            "node at the start and end of every phase, and every this many seconds during the steps",
+        ),
         # RefreshTest
         dict(name="skip_download", env="SCT_SKIP_DOWNLOAD", type=boolean, help=""),
         dict(name="sstable_file", env="SCT_SSTABLE_FILE", type=str, help=""),

@@ -25,3 +25,8 @@ append_scylla_yaml:
 pre_create_keyspace: [
   "CREATE KEYSPACE IF NOT EXISTS keyspace1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'} AND storage = {'type': 'S3', 'bucket': 'manager-backup-tests-us-east-1', 'endpoint': 's3.us-east-1.amazonaws.com', 'disk_cache': 'pages'};",
 ]
+
+# Fill the page cache with the whole table before the warm-up, by a scan which reads every row on every replica in
+# long sequential S3 reads: the warm-up's random reads alone left ~5-10% of the reads missing the cache (pages of
+# rarely read keys were never read), and fetched one 4 KiB page per S3 request.
+perf_scan_before_warmup: true

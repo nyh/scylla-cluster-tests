@@ -1,4 +1,6 @@
 import pathlib
+import re
+import threading
 import time
 from enum import Enum
 from collections import defaultdict, Counter
@@ -6,6 +8,9 @@ from collections import defaultdict, Counter
 import json
 from dataclasses import dataclass, replace
 from typing import List, Union
+
+from cassandra import ConsistencyLevel
+from cassandra.query import SimpleStatement
 
 from performance_regression_test import PerformanceRegressionTest
 from sdcm.utils.common import skip_optional_stage
@@ -385,6 +390,11 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
             self.run_post_prepare_cql(workload=workload)
 
     def check_latency_during_steps(self, step):
+        if not pathlib.Path(self.latency_results_file).exists():
+            # latency_calculator_decorator() failed, and reported it (e.g., the monitor node failed): go on with the
+            # next steps rather than end the test.
+            self.log.error("Step %s: no latency results in %s", step, self.latency_results_file)
+            return {step: {"step": step, "legend": "", "cycles": []}}
         with open(self.latency_results_file, encoding="utf-8") as file:
             latency_results = json.load(file)
         self.log.debug(
@@ -541,6 +551,11 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
     def run_gradual_increase_load(self, workload: Workload, stress_num, num_loaders, test_name):  # noqa: PLR0914
         workload = self.update_num_threads_for_steps(workload=workload)
 
+        self.log_s3_counters("before_warmup")
+        if self.params.get("perf_scan_before_warmup"):
+            self.scan_table_before_warmup(workload)
+            self.log_s3_counters("after_scan")
+
         if workload.cs_cmd_warm_up is not None:
             # Use the maximum thread count for warmup to ensure the cache is warmed up with the highest level of concurrency
             # Build warmup params dict
@@ -553,8 +568,10 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
             self.warmup_cache(workload.cs_cmd_warm_up, warmup_params)
             # Wait for 4 minutes after warmup to let for all background processes to finish
             time.sleep(240)
+            self.log_s3_counters("after_warmup")
 
         total_summary = {}
+        stop_periodic_s3_counters = self.start_periodic_s3_counters()
 
         sequential_steps = self.get_sequential_throttle_steps(workload)
         for throttle_step_dict, num_threads, current_throttle_step in zip(
@@ -585,14 +602,19 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
                     legend=f"Gradual test step {current_throttle_step} op/s", cycle_name=current_throttle_step
                 )
             )(self.run_step)
+            self.log_s3_counters(f"step_start:{current_throttle_step}")
             results, _ = run_step(
                 stress_cmds=workload.cs_cmd_tmpl,
                 step_params=step_params,
                 step_duration=workload.step_duration,
             )
+            self.log_s3_counters(f"step_end:{current_throttle_step}")
             self.log.debug("All c-s commands results collected and saved in Argus")
 
             calculate_result = self._calculate_average_max_latency(results)
+            # The cassandra-stress summary of the step, also when the latencies from the HDR files and Prometheus
+            # are missing (e.g., when the monitor node failed).
+            self.log.info("Step %s cassandra-stress results: %s", current_throttle_step, calculate_result)
             summary_result = self.check_latency_during_steps(step=current_throttle_step)
             summary_result[current_throttle_step].update({"ops_rate": calculate_result["op rate"] * num_loaders})
             total_summary.update(summary_result)
@@ -614,6 +636,7 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
                 # continuous period of three minutes.
                 self.wait_for_no_tablets_splits()
 
+        stop_periodic_s3_counters.set()
         self.save_total_summary_in_file(total_summary)
 
     def save_total_summary_in_file(self, total_summary):
@@ -649,6 +672,80 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
             status[key] = max(latency)
 
         return status
+
+    # The counters which log_s3_counters() prints: the S3 client's requests and bytes, the object storage page
+    # cache's counters, and the row cache's hits and misses. Only these labels are kept (the counters are summed
+    # over all the others, e.g. over shards): the S3 client's scheduling group and the page cache's kinds of reads.
+    S3_COUNTERS_REGEX = r"^scylla_(s3_total_\w+|object_storage_page_cache_\w+|cache_(row|partition)_(hits|misses))[{ ]"
+    S3_COUNTERS_KEPT_LABELS = ("class", "reads", "reason", "operation")
+
+    def log_s3_counters(self, label):
+        """
+        If perf_s3_counters_interval is set, log the S3 client's and the caches' counters of every DB node, summed
+        over shards, in one line per node: "S3 counters <label> <node> {json}". The counters are read from the
+        node's metrics endpoint, not from Prometheus, so that they survive a failure of the monitor node. The
+        requests of a phase of the test are the differences between the lines logged at its start and at its end.
+        """
+        if not self.params.get("perf_s3_counters_interval"):
+            return
+        for node in self.db_cluster.nodes:
+            try:
+                result = node.remoter.run(
+                    f"curl -s --max-time 30 http://localhost:9180/metrics | grep -E '{self.S3_COUNTERS_REGEX}'",
+                    verbose=False,
+                    ignore_status=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning("S3 counters %s %s: failed to read the metrics: %s", label, node.name, exc)
+                continue
+            totals = defaultdict(float)
+            for line in result.stdout.splitlines():
+                match = re.match(r"^(\w+)(?:\{(.*)\})? (\S+)$", line)
+                if not match:
+                    continue
+                name, labels, value = match.groups()
+                kept = [
+                    f"{key}={val}"
+                    for key, val in re.findall(r'(\w+)="([^"]*)"', labels or "")
+                    if key in self.S3_COUNTERS_KEPT_LABELS
+                ]
+                totals[name + (f"{{{','.join(kept)}}}" if kept else "")] += float(value)
+            self.log.info(
+                "S3 counters %s %s %s", label, node.name, json.dumps({k: round(v) for k, v in sorted(totals.items())})
+            )
+
+    def start_periodic_s3_counters(self):
+        """
+        Every perf_s3_counters_interval seconds, if it is set, log the S3 counters (see log_s3_counters()), until
+        the returned event is set.
+        """
+        stop = threading.Event()
+        if interval := self.params.get("perf_s3_counters_interval"):
+
+            def log_periodically():
+                while not stop.wait(interval):
+                    self.log_s3_counters("periodic")
+
+            threading.Thread(target=log_periodically, name="s3-counters", daemon=True).start()
+        return stop
+
+    def scan_table_before_warmup(self, workload: Workload):
+        """
+        Read every row of the test table once on every replica, with a parallel SELECT count(*) at CL=ALL. This
+        fills the object storage page cache with all of the table's data, in long sequential reads from the object
+        store (few requests). A warm-up by random reads instead fetches one small page per request, and misses the
+        pages which hold only rarely read keys. The scan doesn't use BYPASS CACHE, whose reads don't populate the
+        page cache. It doesn't read the index; the warm-up which follows caches the index pages.
+        """
+        query = f"SELECT count(*) FROM {workload.test_keyspace}.{workload.test_table} USING TIMEOUT 7200s"
+        self.log.info("Scanning the table before the warm-up: %s", query)
+        start = time.time()
+        try:
+            with self.db_cluster.cql_connection_patient(self.db_cluster.nodes[0]) as session:
+                rows = session.execute(SimpleStatement(query, consistency_level=ConsistencyLevel.ALL), timeout=7300)
+                self.log.info("Scan done in %d s: %s rows", time.time() - start, rows.one()[0])
+        except Exception as exc:  # noqa: BLE001
+            self.log.error("Scan failed after %d s: %s", time.time() - start, exc)
 
     def warmup_cache(self, stress_cmd_templ, params_dict):
         """

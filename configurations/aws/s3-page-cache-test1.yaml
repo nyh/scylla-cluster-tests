@@ -6,3 +6,13 @@
 # The jenkins "scylla_ami_id" parameter or a BYO build (SCT_AMI_ID_DB_SCYLLA) override the AMI.
 ami_id_db_scylla: 'ami-00564af4a97d5d7e3'
 instance_type_db: 'i8g.2xlarge'
+
+# The monitor node of perf-regression-predefined-throughput-steps-s3.yaml (t3.small: 2 GB of memory, burstable CPU)
+# stopped responding during run A of 2026-11-11, after ~4.5 hours: Prometheus' data and the latencies of the last
+# step were lost. A larger, non-burstable instance:
+instance_type_monitor: 'm6i.xlarge'
+
+# Log the S3 requests and the caches' hits and misses of every DB node at the start and end of every phase, and every
+# 5 minutes during the steps, in the test's log (see log_s3_counters()): S3 request costs can be computed from them
+# even if the monitor node fails.
+perf_s3_counters_interval: 300
