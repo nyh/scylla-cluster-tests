@@ -1,0 +1,9 @@
+# Makes the disk page cache of configurations/aws/s3-page-cache-on.yaml smaller than the data, so that the test
+# exercises eviction: add it after s3-page-cache-on.yaml in test_config.
+#
+# Each node holds the whole dataset of the test (RF=3 on 3 nodes), which takes ~197 GB in the cache (Data pages ~196
+# GB, index pages ~1.4 GB). 137.5 GiB (147.6 GB) is ~75% of it: the full-table scan before the warm-up overflows the
+# cache, and the reads' misses keep replacing pages during the steps. Each page holds ~4 rows of unrelated keys, so
+# with the test's gaussian key distribution, even an ideal cache of 75% of the pages misses ~5% of the page reads.
+append_scylla_yaml:
+  object_storage_page_cache_size_in_mb: 140800
