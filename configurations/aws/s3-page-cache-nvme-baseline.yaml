@@ -1,0 +1,18 @@
+# The baseline for the S3 page cache: the same test as with configurations/aws/s3-page-cache-on.yaml, with the
+# same Scylla build, but with the table on the nodes' local NVMe disk instead of on S3, and no page cache. Add it
+# after configurations/aws/perf-regression-predefined-throughput-steps-s3.yaml in test_config. Comparing its read
+# latency and throughput with those of a page cache that holds the whole table shows what serving the reads from
+# the page cache costs, compared to reading the table's own sstables from the same disk.
+#
+# Clear the AMI of configurations/aws/s3-page-cache-test1.yaml, so that only a BYO build (SCT_AMI_ID_DB_SCYLLA) or the
+# scylla_ami_id parameter can provide Scylla (see configurations/aws/s3-page-cache-on.yaml).
+ami_id_db_scylla: ''
+
+# The keyspace of perf-regression-predefined-throughput-steps-s3.yaml, without its storage clause: local storage.
+pre_create_keyspace: [
+  "CREATE KEYSPACE IF NOT EXISTS keyspace1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'};",
+]
+
+# Scan the table before the warm-up, as configurations/aws/s3-page-cache-on.yaml does, so that both runs go through
+# the same phases (here the scan only passes through the row cache).
+perf_scan_before_warmup: true
