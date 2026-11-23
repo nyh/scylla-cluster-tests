@@ -1935,6 +1935,22 @@ class SCTConfiguration(dict):
             "every replica (SELECT count(*) at CL=ALL), e.g. to fill the object storage page cache",
         ),
         dict(
+            name="s3_test_bucket_per_run",
+            env="SCT_S3_TEST_BUCKET_PER_RUN",
+            type=boolean,
+            help="The gradual performance test creates an S3 bucket for the run, tagged like its instances (so S3 "
+            "costs are billed to its billing_project), puts its name in pre_create_keyspace instead of "
+            "$s3_test_bucket, and deletes it at the end",
+        ),
+        dict(
+            name="perf_compact_tables_before_steps",
+            env="SCT_PERF_COMPACT_TABLES_BEFORE_STEPS",
+            type=str_or_list,
+            help="Tables (keyspace.table) which the gradual performance test compacts with a major compaction on "
+            "every DB node after the cache warm-up, before the steps, e.g. system_cache.pagecache to keep the object "
+            "storage page cache in one sstable run",
+        ),
+        dict(
             name="perf_s3_counters_interval",
             env="SCT_PERF_S3_COUNTERS_INTERVAL",
             type=int,

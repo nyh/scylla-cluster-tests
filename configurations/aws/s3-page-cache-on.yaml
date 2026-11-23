@@ -21,9 +21,12 @@ experimental_features:
 append_scylla_yaml:
   object_storage_page_cache_size_in_mb: 819200
 
-# The keyspace of perf-regression-predefined-throughput-steps-s3.yaml, with 'disk_cache': 'pages' added.
+# The keyspace of perf-regression-predefined-throughput-steps-s3.yaml, with 'disk_cache': 'pages' added, in a bucket
+# of the run's own instead of the shared manager-backup-tests-us-east-1: S3 bills requests and storage to the
+# bucket's tags, so this bills the run's S3 costs to its billing_project (see s3_test_bucket_per_run).
+s3_test_bucket_per_run: true
 pre_create_keyspace: [
-  "CREATE KEYSPACE IF NOT EXISTS keyspace1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'} AND storage = {'type': 'S3', 'bucket': 'manager-backup-tests-us-east-1', 'endpoint': 's3.us-east-1.amazonaws.com', 'disk_cache': 'pages'};",
+  "CREATE KEYSPACE IF NOT EXISTS keyspace1 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '3'} AND storage = {'type': 'S3', 'bucket': '$s3_test_bucket', 'endpoint': 's3.us-east-1.amazonaws.com', 'disk_cache': 'pages'};",
 ]
 
 # Fill the page cache with the whole table before the warm-up, by a scan which reads every row on every replica in

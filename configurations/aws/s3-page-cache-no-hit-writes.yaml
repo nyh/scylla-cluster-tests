@@ -1,0 +1,11 @@
+# A measurement of what recording the hits of the S3 page cache costs: add it after
+# configurations/aws/s3-page-cache-on.yaml in test_config. Each page cache hit writes a row to the node-local table
+# system_cache.pagecache_hits, unless the shard remembers that it already recorded a hit of that page in the current
+# pass of eviction. It remembers at most object_storage_page_cache_max_remembered_hits pages (100,000 by default), while
+# a shard in this test holds ~7M pages, so almost every hit writes a row. With a limit above the number of pages, and a
+# cache that never evicts (so the pass never ends), the warm-up records one hit of each page, and the steps record
+# almost none - so comparing this run with one without this file shows the cost of the hit writes.
+# The remembered pages take memory: ~30-40 bytes each plus B-tree overhead, ~250-300 MB per shard here, which the
+# Scylla build must hold in a B-tree rather than in a hash table (s3-2 after f82e305622).
+append_scylla_yaml:
+  object_storage_page_cache_max_remembered_hits: 100000000

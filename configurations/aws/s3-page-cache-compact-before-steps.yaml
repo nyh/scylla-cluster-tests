@@ -1,0 +1,6 @@
+# Compacts the S3 page cache's table to one sstable run on every DB node after the cache warm-up, before the steps:
+# add it after configurations/aws/s3-page-cache-on.yaml in test_config. A lookup in the cache reads one sstable in
+# every run of system_cache.pagecache which holds the cached S3 sstable's pages (~2.3 per lookup in run A), so this
+# measures what those extra reads cost. With the cache filled and few misses, few new runs form during the steps.
+perf_compact_tables_before_steps:
+  - system_cache.pagecache

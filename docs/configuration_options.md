@@ -2740,6 +2740,24 @@ Before the cache warm-up of the gradual performance test, read every row of the 
 **type:** boolean
 
 
+## **s3_test_bucket_per_run** / SCT_S3_TEST_BUCKET_PER_RUN
+
+The gradual performance test creates an S3 bucket for the run, tagged like its instances (so S3 costs are billed to its billing_project), puts its name in pre_create_keyspace instead of $s3_test_bucket, and deletes it at the end
+
+**default:** N/A
+
+**type:** boolean
+
+
+## **perf_compact_tables_before_steps** / SCT_PERF_COMPACT_TABLES_BEFORE_STEPS
+
+Tables (keyspace.table) which the gradual performance test compacts with a major compaction on every DB node after the cache warm-up, before the steps, e.g. system_cache.pagecache to keep the object storage page cache in one sstable run
+
+**default:** N/A
+
+**type:** str_or_list (appendable)
+
+
 ## **perf_s3_counters_interval** / SCT_PERF_S3_COUNTERS_INTERVAL
 
 If set, the gradual performance test logs the S3 client's and the caches' counters of every DB node at the start and end of every phase, and every this many seconds during the steps

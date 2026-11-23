@@ -2,6 +2,7 @@ import pathlib
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from collections import defaultdict, Counter
 
@@ -9,10 +10,13 @@ import json
 from dataclasses import dataclass, replace
 from typing import List, Union
 
+import boto3
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
 from performance_regression_test import PerformanceRegressionTest
+from sdcm.test_config import TestConfig
+from sdcm.utils.aws_region import AwsRegion
 from sdcm.utils.common import skip_optional_stage
 from sdcm.utils.tablets.common import set_tablets_balancing
 from sdcm.sct_events import Severity
@@ -84,10 +88,91 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
     Latency for every step is received from cassandra-stress HDR file and reported in Argus and email.
     """
 
+    # In pre_create_keyspace, replaced by the name of the S3 bucket which the test creates (s3_test_bucket_per_run).
+    S3_TEST_BUCKET_PLACEHOLDER = "$s3_test_bucket"
+
     def setUp(self):
         super().setUp()
         self.CLUSTER_SIZE = self.params.get("n_db_nodes")
         self.REPLICATION_FACTOR = 3
+        if self.params.get("s3_test_bucket_per_run"):
+            self.create_s3_test_bucket()
+
+    def create_s3_test_bucket(self):
+        """
+        Create an S3 bucket for this run's object-storage keyspace, and put its name in pre_create_keyspace instead
+        of S3_TEST_BUCKET_PLACEHOLDER. S3 bills requests and storage to the bucket's tags, so a bucket of the run's
+        own, tagged like its instances (with its billing_project), bills the run's S3 costs to its project, which a
+        shared bucket can't. The bucket allows the DB nodes' IAM role to use it, expires its objects after 14 days in
+        case the cleanup fails, and is emptied and deleted when the test ends.
+        """
+        region = self.params.region_names[0]
+        name = f"sct-s3-test-{self.test_config.test_id()}".lower()
+        s3 = boto3.client("s3", region_name=region)
+        location = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
+        s3.create_bucket(Bucket=name, **location)
+        # Cleanups run after tearDown(), so after the DB nodes, which write to the bucket, are gone.
+        self.addCleanup(self.delete_s3_test_bucket, s3, name)
+        tags = TestConfig.common_tags(self.params)
+        s3.put_bucket_tagging(Bucket=name, Tagging={"TagSet": [{"Key": k, "Value": v} for k, v in tags.items()]})
+        s3.put_bucket_lifecycle_configuration(
+            Bucket=name,
+            LifecycleConfiguration={
+                "Rules": [
+                    {
+                        "ID": "expire-after-the-test",
+                        "Status": "Enabled",
+                        "Filter": {"Prefix": ""},
+                        "Expiration": {"Days": 14},
+                        "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1},
+                    }
+                ]
+            },
+        )
+        # The DB nodes access S3 with the role of their instance profile. Its own policy may not cover a new
+        # bucket, so the bucket's policy allows it.
+        account = boto3.client("sts").get_caller_identity()["Account"]
+        role_arn = f"arn:aws:iam::{account}:role/{AwsRegion.SCT_NODES_ROLE_ARN}"
+        try:
+            profile = boto3.client("iam").get_instance_profile(
+                InstanceProfileName=self.params.get("aws_instance_profile_name_db")
+            )
+            role_arn = profile["InstanceProfile"]["Roles"][0]["Arn"]
+        except Exception as exc:  # noqa: BLE001
+            self.log.warning("Couldn't read the DB nodes' instance profile, assuming role %s: %s", role_arn, exc)
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "SctDbNodes",
+                    "Effect": "Allow",
+                    "Principal": {"AWS": role_arn},
+                    "Action": "s3:*",
+                    "Resource": [f"arn:aws:s3:::{name}", f"arn:aws:s3:::{name}/*"],
+                }
+            ],
+        }
+        s3.put_bucket_policy(Bucket=name, Policy=json.dumps(policy))
+        self.params["pre_create_keyspace"] = [
+            cmd.replace(self.S3_TEST_BUCKET_PLACEHOLDER, name) for cmd in self.params.get("pre_create_keyspace") or []
+        ]
+        self.log.info("Created S3 bucket %s in %s with tags %s, for role %s", name, region, tags, role_arn)
+
+    def delete_s3_test_bucket(self, s3, name):
+        """Delete all the objects of the bucket which create_s3_test_bucket() created, and the bucket."""
+        try:
+            deleted = 0
+            for page in s3.get_paginator("list_objects_v2").paginate(Bucket=name):
+                keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+                if keys:
+                    s3.delete_objects(Bucket=name, Delete={"Objects": keys, "Quiet": True})
+                    deleted += len(keys)
+            for upload in s3.list_multipart_uploads(Bucket=name).get("Uploads", []):
+                s3.abort_multipart_upload(Bucket=name, Key=upload["Key"], UploadId=upload["UploadId"])
+            s3.delete_bucket(Bucket=name)
+            self.log.info("Deleted S3 bucket %s and its %d objects", name, deleted)
+        except Exception as exc:  # noqa: BLE001
+            self.log.error("Failed to delete S3 bucket %s (its objects expire in 14 days): %s", name, exc)
 
     def throttle_steps(self, workload_type):
         throttle_steps = self.params["perf_gradual_throttle_steps"]
@@ -570,6 +655,10 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
             time.sleep(240)
             self.log_s3_counters("after_warmup")
 
+        if tables := self.params.get("perf_compact_tables_before_steps"):
+            self.compact_tables_before_steps(tables)
+            self.log_s3_counters("after_compaction")
+
         total_summary = {}
         stop_periodic_s3_counters = self.start_periodic_s3_counters()
 
@@ -674,10 +763,14 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
         return status
 
     # The counters which log_s3_counters() prints: the S3 client's requests and bytes, the object storage page
-    # cache's counters, and the row cache's hits and misses. Only these labels are kept (the counters are summed
-    # over all the others, e.g. over shards): the S3 client's scheduling group and the page cache's kinds of reads.
-    S3_COUNTERS_REGEX = r"^scylla_(s3_total_\w+|object_storage_page_cache_\w+|cache_(row|partition)_(hits|misses))[{ ]"
-    S3_COUNTERS_KEPT_LABELS = ("class", "reads", "reason", "operation")
+    # cache's counters, the row cache's hits and misses, the writes, the memory allocated, and the CPU time of each
+    # scheduling group. Only these labels are kept (the counters are summed over all the others, e.g. over
+    # shards): the scheduling groups of the S3 client and of the CPU time, and the page cache's kinds of reads.
+    S3_COUNTERS_REGEX = (
+        r"^scylla_(s3_total_\w+|object_storage_page_cache_\w+|cache_(row|partition)_(hits|misses)"
+        r"|database_total_writes|memory_allocated_memory|scheduler_runtime_ms)[{ ]"
+    )
+    S3_COUNTERS_KEPT_LABELS = ("class", "reads", "reason", "operation", "group")
 
     def log_s3_counters(self, label):
         """
@@ -746,6 +839,29 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
                 self.log.info("Scan done in %d s: %s rows", time.time() - start, rows.one()[0])
         except Exception as exc:  # noqa: BLE001
             self.log.error("Scan failed after %d s: %s", time.time() - start, exc)
+
+    def compact_tables_before_steps(self, tables):
+        """
+        Run a major compaction of each of the given tables (keyspace.table) on every DB node, all nodes in
+        parallel, and log how many sstables each node had before and after. For example, compacting
+        system_cache.pagecache leaves each shard's object storage page cache in one sstable run, so each lookup in
+        the cache reads one of its sstables.
+        """
+        tables = [tables] if isinstance(tables, str) else tables
+
+        def compact(node):
+            for table in tables:
+                keyspace, name = table.split(".")
+                before = len(node.get_list_of_sstables(keyspace, name, suffix="-Data.db"))
+                start = time.time()
+                node.run_nodetool("compact", args=f"{keyspace} {name}", timeout=4 * 3600, long_running=True)
+                after = len(node.get_list_of_sstables(keyspace, name, suffix="-Data.db"))
+                self.log.info("Compacted %s on %s in %d s: %d sstables before, %d after",
+                              table, node.name, time.time() - start, before, after)
+
+        with ThreadPoolExecutor(max_workers=len(self.db_cluster.nodes)) as executor:
+            for future in [executor.submit(compact, node) for node in self.db_cluster.nodes]:
+                future.result()
 
     def warmup_cache(self, stress_cmd_templ, params_dict):
         """
