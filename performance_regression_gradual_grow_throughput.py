@@ -854,7 +854,7 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
                 keyspace, name = table.split(".")
                 before = len(node.get_list_of_sstables(keyspace, name, suffix="-Data.db"))
                 start = time.time()
-                node.run_nodetool("compact", args=f"{keyspace} {name}", timeout=4 * 3600, long_running=True)
+                node.run_nodetool("compact", args=f"{keyspace} {name}", timeout=4 * 3600, long_running=True, retry=0)
                 after = len(node.get_list_of_sstables(keyspace, name, suffix="-Data.db"))
                 self.log.info("Compacted %s on %s in %d s: %d sstables before, %d after",
                               table, node.name, time.time() - start, before, after)
