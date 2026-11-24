@@ -727,6 +727,8 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
 
         stop_periodic_s3_counters.set()
         self.save_total_summary_in_file(total_summary)
+        if self.params.get("perf_restart_node_after_steps"):
+            self.measure_restart_with_page_cache()
 
     def save_total_summary_in_file(self, total_summary):
         total_summary_json = json.dumps(total_summary, indent=4, separators=(", ", ": "))
@@ -806,6 +808,61 @@ class PerformanceRegressionPredefinedStepsTest(PerformanceRegressionTest):
             self.log.info(
                 "S3 counters %s %s %s", label, node.name, json.dumps({k: round(v) for k, v in sorted(totals.items())})
             )
+
+    def page_cache_bytes(self, node):
+        """
+        The bytes in the node's object storage page cache (scylla_object_storage_page_cache_bytes, summed over
+        shards), or None if the node's metrics can't be read.
+        """
+        result = node.remoter.run(
+            "curl -s --max-time 10 http://localhost:9180/metrics | grep -E '^scylla_object_storage_page_cache_bytes[{ ]'",
+            verbose=False,
+            ignore_status=True,
+        )
+        values = [float(line.split()[-1]) for line in result.stdout.splitlines() if line.strip()]
+        return sum(values) if values else None
+
+    def measure_restart_with_page_cache(self):
+        """
+        Restart the first DB node and log how long it takes, with its object storage page cache full: the time
+        to stop Scylla, to start it until it serves CQL, and until the cache's background count of its bytes
+        ends. Until that count ends, the cache counts only the pages added since the start (and doesn't evict),
+        so the end shows as scylla_object_storage_page_cache_bytes returning to at least 90% of its value before
+        the restart. A failure is logged, and doesn't fail the test.
+        """
+        node = self.db_cluster.nodes[0]
+        try:
+            before = self.page_cache_bytes(node)
+            self.log.info("Restart measurement: %s has %s page cache bytes before the restart", node.name, before)
+            start = time.time()
+            node.stop_scylla_server(timeout=1200)
+            stopped = time.time()
+            node.start_scylla_server(verify_up=False, timeout=1200)
+            started = time.time()
+            node.wait_db_up(timeout=3600)
+            cql_up = time.time()
+            self.log.info(
+                "Restart measurement: %s stopped in %d s; started in %d s; serving CQL %d s after the start",
+                node.name, stopped - start, started - stopped, cql_up - stopped,
+            )
+            if not before:
+                return
+            deadline = time.time() + 3600
+            count = None
+            while time.time() < deadline:
+                count = self.page_cache_bytes(node)
+                if count is not None and count >= 0.9 * before:
+                    self.log.info(
+                        "Restart measurement: %s counted its page cache (%d bytes) %d s after the start, "
+                        "%d s after serving CQL",
+                        node.name, count, time.time() - stopped, time.time() - cql_up,
+                    )
+                    return
+                time.sleep(5)
+            self.log.warning("Restart measurement: %s's page cache bytes %s didn't return to 90%% of %s in an hour",
+                             node.name, count, before)
+        except Exception as exc:  # noqa: BLE001
+            self.log.error("Restart measurement failed: %s", exc)
 
     def start_periodic_s3_counters(self):
         """

@@ -1951,6 +1951,13 @@ class SCTConfiguration(dict):
             "storage page cache in one sstable run",
         ),
         dict(
+            name="perf_restart_node_after_steps",
+            env="SCT_PERF_RESTART_NODE_AFTER_STEPS",
+            type=boolean,
+            help="After the steps, the gradual performance test restarts the first DB node and logs the times to "
+            "stop it, to serve CQL again, and to count the bytes of its object storage page cache",
+        ),
+        dict(
             name="perf_s3_counters_interval",
             env="SCT_PERF_S3_COUNTERS_INTERVAL",
             type=int,

@@ -2758,6 +2758,15 @@ Tables (keyspace.table) which the gradual performance test compacts with a major
 **type:** str_or_list (appendable)
 
 
+## **perf_restart_node_after_steps** / SCT_PERF_RESTART_NODE_AFTER_STEPS
+
+After the steps, the gradual performance test restarts the first DB node and logs the times to stop it, to serve CQL again, and to count the bytes of its object storage page cache
+
+**default:** N/A
+
+**type:** boolean
+
+
 ## **perf_s3_counters_interval** / SCT_PERF_S3_COUNTERS_INTERVAL
 
 If set, the gradual performance test logs the S3 client's and the caches' counters of every DB node at the start and end of every phase, and every this many seconds during the steps

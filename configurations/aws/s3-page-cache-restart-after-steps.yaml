@@ -1,0 +1,4 @@
+# After the steps, restarts the first DB node and logs how long it takes to stop, to serve CQL again, and to
+# count the bytes of its full object storage page cache (the cache doesn't evict until that count ends): add it
+# after configurations/aws/s3-page-cache-on.yaml in test_config.
+perf_restart_node_after_steps: true
